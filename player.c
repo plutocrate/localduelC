@@ -79,11 +79,11 @@ void player_compute_boxes(Player *p) {
                         p->state_timer <= (PARRY_FRAMES - PARRY_ACTIVE_START));
     if (parry_active) {
         float px2 = bx + (p->facing > 0 ? bw : -32.0f);
-        float py2 = by;
+        float py2 = by + bh * 0.05f;
         p->parry_box.x = px2;
         p->parry_box.y = py2;
         p->parry_box.w = 32.0f;
-        p->parry_box.h = bh;
+        p->parry_box.h = bh * 0.90f;
     } else {
         p->parry_box.x = 0;
         p->parry_box.y = 0;
