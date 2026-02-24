@@ -1,6 +1,7 @@
 #include "game.h"
 #include "physics.h"
 #include "audio.h"
+#include "ai.h"
 #include "raylib.h"
 #include <math.h>
 #include <string.h>
@@ -23,7 +24,7 @@ static void render_sword(const Player *p, float cam_x, bool debug);
 static void render_thrown_sword(const ThrowingSword *s, float cam_x);
 static void render_arena(float cam_x);
 static void render_hud(const GameState *gs);
-static void render_controls_hint(void);
+static void render_controls_hint(bool ai_on);
 
 // Forward declaration - defined later in rendering section
 static float g_cam_zoom = 1.0f;
@@ -37,14 +38,16 @@ static float g_cam_zoom = 1.0f;
 // ----------------------------------------------------------------
 void game_init(GameState *gs) {
     memset(gs, 0, sizeof(*gs));
-    gs->phase = PHASE_PLAYING;
+    gs->phase = PHASE_MENU;
+    gs->menu_selected = 0;  // 0=vs AI, 1=local 2P
     gs->frame = 0;
     gs->debug_hitboxes = false;
 
     InitAudioDevice();
     audio_init(&gs->audio);
 
-    game_start_round(gs);
+    gs->ai_enabled = true;
+    ai_init(&gs->ai);
 }
 
 void game_shutdown(GameState *gs) {
@@ -116,6 +119,10 @@ static void update_camera(Camera2D_State *cam, const Player *p0, const Player *p
 // Fixed Update
 // ----------------------------------------------------------------
 void game_fixed_update(GameState *gs) {
+    if (gs->phase == PHASE_MENU) {
+        return;  // menu handled in game_tick (render frame)
+    }
+
     if (gs->phase == PHASE_ROUND_OVER) {
         gs->round_over_timer--;
         if (gs->round_over_timer <= 0) {
@@ -133,8 +140,7 @@ void game_fixed_update(GameState *gs) {
         if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
             gs->players[0].score = 0;
             gs->players[1].score = 0;
-            game_start_round(gs);
-            gs->phase = PHASE_PLAYING;
+            gs->phase = PHASE_MENU;
         }
         return;
     }
@@ -146,7 +152,12 @@ void game_fixed_update(GameState *gs) {
     memset(&p1_in, 0, sizeof(p1_in));
 
     input_buffer_consume(&gs->input_buf_p1, &p0_in, gs->frame);
-    input_buffer_consume(&gs->input_buf_p2, &p1_in, gs->frame);
+    if (gs->ai_enabled) {
+        ai_update(&gs->ai, &gs->players[1], &gs->players[0],
+                  gs->swords, MAX_THROWN_SWORDS, &p1_in);
+    } else {
+        input_buffer_consume(&gs->input_buf_p2, &p1_in, gs->frame);
+    }
 
     // Snapshot state BEFORE simulation so audio can detect transitions
     PlayerState prev_states[2] = {
@@ -226,6 +237,22 @@ void game_tick(GameState *gs, float dt) {
     // Poll inputs ONCE per real render frame
     input_buffer_poll_p1(&gs->input_buf_p1);
     input_buffer_poll_p2(&gs->input_buf_p2);
+
+    // Menu navigation (handled in render frame for responsiveness)
+    if (gs->phase == PHASE_MENU) {
+        if (IsKeyPressed(KEY_LEFT)  || IsKeyPressed(KEY_A) ||
+            IsKeyPressed(KEY_UP)    || IsKeyPressed(KEY_W))
+            gs->menu_selected = 0;
+        if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D) ||
+            IsKeyPressed(KEY_DOWN)  || IsKeyPressed(KEY_S))
+            gs->menu_selected = 1;
+        if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
+            gs->ai_enabled = (gs->menu_selected == 0);
+            if (gs->ai_enabled) ai_init(&gs->ai);
+            game_start_round(gs);
+            gs->phase = PHASE_PLAYING;
+        }
+    }
 
     // Debug toggles: sampled once per render frame
     if (IsKeyPressed(KEY_F1))  gs->debug_hitboxes = !gs->debug_hitboxes;
@@ -555,8 +582,8 @@ static void render_hud(const GameState *gs) {
     snprintf(buf, sizeof(buf), "P1: %d", gs->players[0].score);
     DrawText(buf, 40, 20, 28, (Color){100, 180, 255, 255});
 
-    snprintf(buf, sizeof(buf), "P2: %d", gs->players[1].score);
-    DrawText(buf, sw - 120, 20, 28, (Color){255, 120, 80, 255});
+    snprintf(buf, sizeof(buf), "P2%s: %d", gs->ai_enabled ? "[AI]" : "", gs->players[1].score);
+    DrawText(buf, sw - 150, 20, 28, (Color){255, 120, 80, 255});
 
     snprintf(buf, sizeof(buf), "First to %d", WIN_SCORE);
     DrawText(buf, sw / 2 - 60, 20, 18, (Color){200, 200, 200, 180});
@@ -594,16 +621,135 @@ static void render_hud(const GameState *gs) {
     }
 }
 
-static void render_controls_hint(void) {
+static void render_controls_hint(bool ai_on) {
     int sh = g_screen_h();
     DrawText("P1: WASD=Move  J=Attack  K=Parry  L=Throw", 10, sh - 46, 13,
              (Color){120, 120, 150, 200});
-    DrawText("P2: Arrows=Move  Num1=Atk  Num2=Parry  Num3=Throw  |  F1=Hitboxes  F11=Fullscreen",
-             10, sh - 28, 13, (Color){120, 120, 150, 200});
+    if (ai_on)
+        DrawText("vs AI  |  F1=Hitboxes  F11=Fullscreen", 10, sh - 28, 13,
+                 (Color){120, 120, 150, 200});
+    else
+        DrawText("P2: Arrows=Move  Num1=Atk  Num2=Parry  Num3=Throw  |  F1=Hitboxes  F11=Fullscreen",
+                 10, sh - 28, 13, (Color){120, 120, 150, 200});
+}
+
+// ----------------------------------------------------------------
+// Main menu render
+// ----------------------------------------------------------------
+static void render_menu(const GameState *gs) {
+    int sw = g_screen_w();
+    int sh = g_screen_h();
+    int cx = sw / 2;
+    int cy = sh / 2;
+
+    // Background — draw arena dimly as backdrop
+    render_arena(0.0f);
+
+    // Dark overlay
+    DrawRectangle(0, 0, sw, sh, (Color){0, 0, 0, 160});
+
+    // Title
+    const char *title = "DUEL";
+    int tsz = sw / 8;
+    if (tsz < 48) tsz = 48;
+    if (tsz > 120) tsz = 120;
+    int tw = MeasureText(title, tsz);
+    DrawText(title, cx - tw / 2, sh / 5, tsz, (Color){200, 160, 255, 255});
+
+    const char *sub = "A Nidhogg-inspired fencing game";
+    int stw = MeasureText(sub, 20);
+    DrawText(sub, cx - stw / 2, sh / 5 + tsz + 12, 20, (Color){160, 140, 190, 200});
+
+    // Mode options
+    const char *opts[2] = { "VS  AI", "LOCAL  2-PLAYER" };
+    const char *descs[2] = {
+        "Fight a tough AI opponent",
+        "Two players on one keyboard"
+    };
+
+    int box_w   = sw * 2 / 5;
+    if (box_w < 280) box_w = 280;
+    if (box_w > 480) box_w = 480;
+    int box_h   = sh / 7;
+    if (box_h < 80) box_h = 80;
+    int gap     = sw / 20;
+    int total_w = box_w * 2 + gap;
+    int box_y   = cy - box_h / 2;
+
+    for (int i = 0; i < 2; i++) {
+        int bx = cx - total_w / 2 + i * (box_w + gap);
+        bool sel = (gs->menu_selected == i);
+
+        // Box background
+        Color bg  = sel ? (Color){60, 40, 100, 220} : (Color){20, 15, 35, 180};
+        Color bdr = sel ? (Color){200, 160, 255, 255} : (Color){80, 60, 110, 180};
+        DrawRectangle(bx, box_y, box_w, box_h, bg);
+        DrawRectangleLines(bx, box_y, box_w, box_h, bdr);
+
+        // Selection glow
+        if (sel) {
+            DrawRectangleLines(bx - 2, box_y - 2, box_w + 4, box_h + 4,
+                               (Color){200, 160, 255, 80});
+        }
+
+        // Icon area
+        int icon_sz = box_h / 3;
+        int icon_x  = bx + box_w / 2;
+        int icon_y  = box_y + box_h / 4;
+        if (i == 0) {
+            // Robot head icon for AI
+            DrawRectangleLines(icon_x - icon_sz/2, icon_y - icon_sz/2,
+                               icon_sz, icon_sz, bdr);
+            DrawCircle(icon_x - icon_sz/5, icon_y, icon_sz/6,
+                       sel ? (Color){100,220,255,255} : (Color){80,140,180,200});
+            DrawCircle(icon_x + icon_sz/5, icon_y, icon_sz/6,
+                       sel ? (Color){100,220,255,255} : (Color){80,140,180,200});
+        } else {
+            // Two stick figures for local 2P
+            for (int p2 = 0; p2 < 2; p2++) {
+                int px2 = icon_x + (p2 == 0 ? -icon_sz/3 : icon_sz/3);
+                Color pc = (p2 == 0) ? (Color){100,180,255,200} : (Color){255,120,80,200};
+                if (!sel) pc.a = 140;
+                DrawCircle(px2, icon_y - icon_sz/4, icon_sz/5, pc);
+                DrawLine(px2, icon_y - icon_sz/10, px2, icon_y + icon_sz/4, pc);
+            }
+        }
+
+        // Label
+        Color lc = sel ? (Color){255, 240, 100, 255} : (Color){180, 170, 200, 200};
+        int lsz  = sel ? 26 : 22;
+        int ltw  = MeasureText(opts[i], lsz);
+        DrawText(opts[i], bx + box_w/2 - ltw/2, box_y + box_h*56/100, lsz, lc);
+
+        // Description
+        int dtw = MeasureText(descs[i], 14);
+        DrawText(descs[i], bx + box_w/2 - dtw/2, box_y + box_h*80/100, 14,
+                 (Color){160, 150, 180, sel ? 200 : 140});
+    }
+
+    // Arrow hint
+    const char *nav = "< >  or  A  D  to select      ENTER / SPACE  to start";
+    int ntw = MeasureText(nav, 16);
+    DrawText(nav, cx - ntw / 2, box_y + box_h + 28, 16, (Color){140, 130, 160, 200});
+
+    // Controls reminder at bottom
+    int hint_y = sh - 60;
+    DrawText("P1: WASD=Move  J=Attack  K=Parry  L=Throw",
+             cx - MeasureText("P1: WASD=Move  J=Attack  K=Parry  L=Throw", 13)/2,
+             hint_y, 13, (Color){100, 100, 130, 180});
+    DrawText("P2: Arrows=Move  Num1=Atk  Num2=Parry  Num3=Throw",
+             cx - MeasureText("P2: Arrows=Move  Num1=Atk  Num2=Parry  Num3=Throw", 13)/2,
+             hint_y + 18, 13, (Color){100, 100, 130, 180});
 }
 
 void game_render(const GameState *gs) {
     BeginDrawing();
+
+    if (gs->phase == PHASE_MENU) {
+        render_menu(gs);
+        EndDrawing();
+        return;
+    }
 
     float cam_x = gs->cam.x;
     g_cam_zoom = gs->cam.zoom;
@@ -622,7 +768,7 @@ void game_render(const GameState *gs) {
     }
 
     render_hud(gs);
-    render_controls_hint();
+    render_controls_hint(gs->ai_enabled);
 
     EndDrawing();
 }

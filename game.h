@@ -6,11 +6,13 @@
 #include "combat.h"
 #include "input.h"
 #include "audio.h"
+#include "ai.h"
 
 #define MAX_THROWN_SWORDS 4
 #define WIN_SCORE         5
 
 typedef enum GamePhase {
+    PHASE_MENU,
     PHASE_PLAYING,
     PHASE_ROUND_OVER,
     PHASE_MATCH_OVER,
@@ -52,6 +54,13 @@ typedef struct GameState {
     // Input buffers: polled once per render frame, consumed per fixed update
     InputBuffer    input_buf_p1;
     InputBuffer    input_buf_p2;
+
+    // Menu
+    int            menu_selected;  // 0=vs AI, 1=local 2P
+
+    // AI
+    AIBrain        ai;
+    bool           ai_enabled;  // true = P2 is AI
 } GameState;
 
 void game_init(GameState *gs);

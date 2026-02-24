@@ -116,14 +116,11 @@ void player_update(Player *p, const Input *in, float dt,
 
         if (in->jump) physics_apply_jump(&p->body);
 
-        p->crouching = in->crouch && p->body.on_ground;
-        if (p->crouching) {
-            p->body.size.y = CROUCH_H;
-        } else {
-            p->body.size.y = PLAYER_HEIGHT;
-        }
+        // S/Down only drops through one-way platforms — it does NOT crouch
+        p->crouching = false;
+        p->body.size.y = PLAYER_HEIGHT;
 
-        // Drop through one-way platforms: tap down while standing on one
+        // Drop through one-way platforms: press down while standing on one
         if (in->crouch && p->body.on_ground && !p->on_main_ground) {
             p->body.drop_through = true;
             p->body.on_ground    = false;
@@ -161,8 +158,6 @@ void player_update(Player *p, const Input *in, float dt,
             p->state != STATE_STUNNED && p->state != STATE_THROW) {
             if (!p->body.on_ground) {
                 p->state = STATE_JUMP;
-            } else if (p->crouching) {
-                p->state = STATE_CROUCH;
             } else if (fabsf(p->body.vel.x) > 10.0f) {
                 p->state = STATE_WALK;
             } else {
@@ -190,11 +185,15 @@ void player_update(Player *p, const Input *in, float dt,
 
     // Resolve one-way platforms (overrides on_ground if landing on one)
     if (!p->body.drop_through) {
-        physics_resolve_platforms(&p->body, prev_bottom, plats, num_plats);
-        if (p->body.on_ground && !p->on_main_ground) {
+        bool on_plat = physics_resolve_platforms(&p->body, prev_bottom, plats, num_plats);
+        if (on_plat) {
             p->on_main_ground = false;  // standing on platform, not main ground
         }
     }
+
+    // Apply friction AFTER platform resolution so on_ground is correct for both
+    // the main floor and one-way platforms. This is the fix for platform sliding.
+    physics_apply_friction(&p->body);
 
     // Clear drop_through after one frame
     p->body.drop_through = false;

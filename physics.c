@@ -32,10 +32,8 @@ void physics_update(PhysicsBody *b, float dt, float ground_y) {
         b->on_ground = false;
     }
 
-    // Apply friction
-    float friction = b->on_ground ? FRICTION_GROUND : FRICTION_AIR;
-    // friction is multiplicative per frame
-    b->vel.x *= friction;
+    // NOTE: friction is NOT applied here — it is applied after platform
+    // resolution in physics_apply_friction() so platforms get ground friction.
 
     // Clamp tiny velocities to zero
     if (b->vel.x > -0.5f && b->vel.x < 0.5f) b->vel.x = 0.0f;
@@ -83,6 +81,12 @@ bool physics_resolve_platforms(PhysicsBody *b, float prev_bottom,
         break;  // only one platform at a time
     }
     return landed;
+}
+
+void physics_apply_friction(PhysicsBody *b) {
+    float friction = b->on_ground ? FRICTION_GROUND : FRICTION_AIR;
+    b->vel.x *= friction;
+    if (b->vel.x > -0.5f && b->vel.x < 0.5f) b->vel.x = 0.0f;
 }
 
 bool rect_overlap(Rect a, Rect b) {

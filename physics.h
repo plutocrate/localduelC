@@ -29,6 +29,7 @@ void physics_apply_walk(PhysicsBody *b, float dir, float dt);
 
 // Resolve one-way platform collisions after physics_update.
 // Returns true if the body is standing on any platform this frame.
+void physics_apply_friction(PhysicsBody *b);
 bool physics_resolve_platforms(PhysicsBody *b, float prev_bottom,
                                const Platform *plats, int num_plats);
 

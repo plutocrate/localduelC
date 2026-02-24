@@ -4,7 +4,7 @@
 CC      = gcc
 TARGET  = duel
 
-SRCS    = main.c game.c player.c physics.c combat.c input.c audio.c
+SRCS    = main.c game.c player.c physics.c combat.c input.c audio.c ai.c
 OBJS    = $(SRCS:.c=.o)
 
 CFLAGS  = -std=c11 -Wall -Wextra -O2 -g
