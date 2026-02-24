@@ -108,6 +108,18 @@ CombatResult combat_resolve(Player *p0, Player *p1, ThrowingSword *swords, int n
             if (target->state == STATE_DEAD) continue;
 
             Rect parry = player_parry_rect(target);
+
+            // --- CATCH: rebounding sword + disarmed original thrower presses parry ---
+            // If the sword is flying back and the disarmed thrower has their parry box
+            // active and the sword overlaps it, they catch it cleanly instead of dying.
+            if (s->rebounding && !target->has_sword && parry.w > 0.0f && rect_overlap(sword_rect, parry)) {
+                target->has_sword   = true;
+                s->active           = false;
+                // Small momentum boost — satisfying "caught it!" feel
+                target->body.vel.x += (float)target->facing * 60.0f;
+                break;
+            }
+
             if (parry.w > 0.0f && rect_overlap(sword_rect, parry)) {
                 // --- PARRY REBOUND ---
                 // Reverse horizontal velocity and boost it slightly for satisfying feel
